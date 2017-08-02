@@ -144,7 +144,7 @@ for lib in lib_dict:
   if i == 0:
     i+=1
     sys.stdout.write(','.join(firstLine) + '\n')
-    continue
+    
 
   sys.stdout.write(lib + ',')
   for key in nextSectionLine:

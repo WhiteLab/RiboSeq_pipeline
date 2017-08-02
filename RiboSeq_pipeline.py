@@ -33,7 +33,7 @@ def new_dir(outputDir, folder):
 
 class Pipeline(BasePipeline):
   def description(self):
-    return ['Pipeline to test cutadapt']
+    return ['Pipeline to process RiboSeq Data and do QC']
 
   # Required paths to run commands
   def configure(self):
@@ -339,7 +339,7 @@ class Pipeline(BasePipeline):
       awk.run(
         Parameter('-v'),
         Parameter("OFS='\\t'"),
-        Parameter("{print ($8-($2+100))}"),
+        Parameter('{print ($8-($2+100))}'),
         Parameter('{}/{}.intersect_start100.bed'.format(newDir, bid)),
         Pipe(
           sort.pipe(
@@ -480,79 +480,3 @@ class Pipeline(BasePipeline):
         Parameter('--t', numThreads),           
         Parameter(fastq)                           # input
       )
-
-    # # create spreadsheet for analysis
-    import csv
-    newDir = new_dir(outputDir, bid)
-    with open('{}/{}.stats_summary.tsv'.format(newDir, bid), 'wb') as ss:
-      # first and second line
-      firstLine = ["CDS_Exons", "5'UTR_Exons", "3'UTR_Exons", 
-       'Introns', 'TSS_up_10kb', 'TES_down_10kb']
-      # ss.write('\t\t\t\t' + ('\t\t\t').join(firstLine) + '\n')
-      secondLine1 = ['TotalReads', 'TotalTags', 'TotalAssignedTags']
-      secondLine2 = ['TotalBases', 'TagCount', 'Tags/kb']
-      # ss.write('\t'+('\t').join(secondLine1) + '\t')
-      for i in firstLine:
-        ss.write(('\t').join(secondLine2) + '\t')
-      # ss.write('\n')
-      # Fill out data
-      # read distribution
-      for bid in bid_list:
-        newDir = new_dir(outputDir, bid)
-        with open('{}/{}.read_distribution.log'.format(newDir, bid), 'rb') as rd:
-          rdReader = csv.reader(rd, dialect='excel', delimiter='\t')
-          i = 0
-          ss.write(bid + '\t')
-          for row in rdReader:
-            theRow = row[0]
-            splitRow = theRow.split()
-            if i < 2:
-              ss.write(splitRow[2] + '\t')
-            elif i == 2:
-              ss.write(splitRow[3] + '\t')
-            elif i > 4:
-              if i < 9 or i == 11 or i == 14:
-                ss.write(('\t').join(splitRow[1:]) + '\t')
-            i += 1
-        ss.write('\n')
-        # Next Section
-        '''
-        totalReads         = total reads of trimmed fq file (bowtie2 input)
-        rtsReads           = number of reads mapped to rts sequence and filtered (can be found in bowtie2 mapping statistics, = # reads mapped 1 time + # reads mapped > 1 time)
-        totalKeptReads     = number of reads aligned 0 times from bowtie2 filtering step (also = totalReads - rtsReads, also = tophat Input)
-        primaryMappedReads = tophat alignment result: can be found in align_summary.txt file of tophat output (= number of 'Mapped' reads in align_summary.txt) 
-        multiMappedReads   = number of reads with multiple alignments in align_summary.txt
-        uniqMappedReads    = primaryMappedReads - multiMappedReads (also = number of reads remaining after extracting 'NH:i:1' reads)
-        '''
-      nextSectionLine = ['sampleID','totalReads','rtsReads','totalKeptReads','primaryMappedReads','multiMappedReads','uniqueMappedReads']
-      # ss.write('\n' + ('\t').join(nextSectionLine) + '\n')
-      for bid in bid_list:
-        newDir = new_dir(outputDir, bid)
-        with open('{}/{}.bowtie2.log2'.format(newDir, bid), 'rb') as btlog:
-          btlogReader = csv.reader(btlog, dialect='excel', delimiter='\t')
-          i = 0
-          for row in btlogReader:
-            theRow = row[0]
-            splitRow = theRow.split()
-            if i == 0:
-              totalReads = splitRow[0]
-            elif i == 2:
-              totalKeptReads = splitRow[0]
-            elif i == 3:
-              rtsReads = int(splitRow[0])
-            elif i == 4:
-              rtsReads += int(splitRow[0])
-            i += 1
-        with open('{}/{}_Log.final.out'.format(newDir, bid), 'rb') as starLog:
-          starLogReader = csv.reader(starLog, dialect='excel', delimiter='\t')
-          i = 0
-          for row in starLogReader:
-            if i == 8:
-              uniqMappedReads = row[1]
-            if i == 23:
-              multiMappedReads = row[1]
-              break
-            i += 1
-          primaryMappedReads = int(multiMappedReads) + int(uniqMappedReads)
-        nextRow = [bid, totalReads, str(rtsReads), totalKeptReads, str(primaryMappedReads), multiMappedReads, uniqMappedReads]
-        ss.write(('\t').join(nextRow) + '\n')
