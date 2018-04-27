@@ -16,6 +16,6 @@ The ChunkyPipes framework can be easily installed with::
     $ chunky run pipeline-name [parameters]
                
  For more information on running these pipeline with ChunkyPipes, please refer to the
- `ChunkyPipes documentation <http://chunky-pipes.readthedocs.io>`_.
+ `ChunkyPipes documentation <http://chunky-pipes.readthedocs.io>`
                 
 For questions about this pipeline, please contact Thomas Goodman (tgoodman at uchicago dot edu)
