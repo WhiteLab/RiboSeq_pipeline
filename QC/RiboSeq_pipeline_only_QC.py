@@ -19,10 +19,11 @@ import multiprocessing
 import subprocess
 import re
 import time
+import pysam
 from chunkypipes.components import Software, Parameter, Redirect, Pipe, BasePipeline
+import numpy as np
 import matplotlib.mlab as mlab
 import matplotlib.pyplot as plt
-from collections import Counter
 
 defaultThreads = multiprocessing.cpu_count()
 
@@ -33,7 +34,7 @@ def new_dir(outputDir, folder):
   return os.path.join(outputDir, folder)
 
 
-
+class Pipeline(BasePipeline):
   def description(self):
     return ['Pipeline to process RiboSeq Data and do QC']
 
@@ -72,15 +73,14 @@ def new_dir(outputDir, folder):
       },
       'picard':{
         'path'      : 'Full path and command to run picard ex: java -jar /mnt/picard/dist/picard.jar',
-        'genomeFasta' : 'Full path to the genome fasta reference file',
-        'refFlat'   : 'Full path to the refFlat.txt reference file'
+        'genomeFasta' : 'Full path to the genome fasta reference file'
       }
     }
 
   # Required input for pipeline software
   # Next time put all these paths to annotations in configure
   def add_pipeline_args(self, parser):
-    parser.add_argument('--fastq:lib', required=True, nargs='*', help='Fastq input for pipeline:library name(prefix for files)')
+    parser.add_argument('--bam:lib', required=True, nargs='*', help='Fastq input for pipeline:library name(prefix for files)')
     parser.add_argument('--output', required=True, help='Where pipeline output should go')
     parser.add_argument('--adapter', default='AGATCGGAAGAGCACACGTCT', help='Adapter sequence for trimming')
     parser.add_argument('--threads', default=defaultThreads, help='Threads to be used for multi-threaded programs. Default is 8')
@@ -90,8 +90,9 @@ def new_dir(outputDir, folder):
     #  /mnt/cinder/thomas/RiboSeq/Lane5/AWS-3_S3_L005_R1_001.fastq.gz
     #  --output /mnt/cinder/thomas/RiboSeq/test --threads
 
+  def run_pipeline(self, pipeline_args, pipeline_config):
     # create variables from parser if wanted
-    fastqFiles = pipeline_args['fastq:lib']
+    bamFiles = pipeline_args['bam:lib']
     outputDir = pipeline_args['output']
     adapter = pipeline_args['adapter']
     numThreads = pipeline_args['threads']
@@ -130,7 +131,6 @@ def new_dir(outputDir, folder):
     pathTo_hg19_bed_start100 = pipeline_config['bedtools']['hg19_start100']
     pathTo_grch37_bed = pipeline_config['bedtools']['grch37_bed']
     pathTo_genomeFasta = pipeline_config['picard']['genomeFasta']
-    pathTo_ref_flat = pipeline_config['picard']['refFlat'] 
 
 
     '''
@@ -152,98 +152,8 @@ def new_dir(outputDir, folder):
     # Keep track of Bids in pipeline
 
     bid_list = []
-    for fastqlib in fastqFiles:
-      bid_list.append(fastqlib.split(':')[-1])
-
-    # Cutadapt
-
-    for fastqlib in fastqFiles:
-      fastq, bid = fastqlib.split(':')
-      newDir = new_dir(outputDir, bid)
-      # Make new directories to store data
-      subprocess.call(['mkdir', newDir])
-
-      # consider multi-threading by splitting in multiple files and then combining
-
-      cutadapt.run(
-        Parameter('--quality-base=33'),
-        Parameter('--minimum-length=25'),
-        Parameter('--discard-untrimmed'),
-        Parameter('--output={}/{}.trimmed.fastq.gz'.format(newDir, bid)),
-        # Parameter('-a', forward_adapter if forward_adapter else 'AGATCGGAAGAGCACACGTCT'),
-        Parameter('-a', adapter),
-        Parameter(fastq),
-        Redirect(stream=Redirect.STDOUT, dest=os.path.join(newDir, 
-         '{}.cutadapt.summary.log'.format(bid)))
-      )
-
-    ''' 
-    Bowtie2
-    
-    bowtie2 --seedlen=23 --un-fq=${filename}_filtered.fq -x $genome -U $file
-     -S | samtools view -Sb - > ${filename}.rts.bam
-
-    Remove snoRNA, rRNA, tRNA, keep only mRna for alignment
-
-    '''
-
-    for bid in bid_list:
-      newDir = new_dir(outputDir, bid)
-      bowtie2.run(
-        Parameter('--seedlen=23'),
-        Parameter('--threads', numThreads),
-        Parameter('--un-gz {}/{}_filtered.fq.gz'.format(newDir, bid)),
-        Parameter('-x', pathToGenome), # Path to rtsRNA_seqs files
-        Parameter('-U', '{}/{}.trimmed.fastq.gz'.format(newDir, bid)),
-        Parameter('-S'),
-        Parameter('{}/{}.rts.sam'.format(newDir, bid)),
-        Redirect(stream=Redirect.STDOUT, dest=os.path.join(newDir, 
-          '{}.bowtie2.log'.format(bid))),
-        Redirect(stream=Redirect.STDERR, dest=os.path.join(newDir, 
-          '{}.bowtie2.log2'.format(bid))),
-        shell=True # Look into changing     
-      ) 
-
-      # This doesn't work
-
-      samtools.run(
-        Parameter('view'),
-        Parameter('-Sb'),
-        Parameter('{}/{}.rts.sam'.format(newDir, bid)),
-        Redirect(stream=Redirect.STDOUT, dest=os.path.join(newDir, 
-          '{}.rts.bam'.format(bid))),
-      )
-
-
-    '''
-    Star 
-      STAR --runThreadN 6 --sjdbGTFfile gtfFile --outSAMtype  BAM Unsorted 
-        --outFileNamePrefix {filename}_ --genomeDir /path/to/genome/index 
-        --genomeFastaFiles --readFilesIn 
-        {filename}_filtered.fq.gz --readFilesCommand zcat
-
-    Basically RNAseq at this point
-
-    Align the kept reads from bowtie to the genome
-    '''
-
-    # Only load the genome one time: genomeLoad = 'LoadAndKeep'.....Doesn't really work
-
-    for bid in bid_list:
-      newDir = new_dir(outputDir, bid)
-      # remove genome from memory on last run
-      # genomeLoad = 'LoadAndRemove'
-      star.run(
-        Parameter('--runThreadN', numThreads), # Change to command line parameter --threads
-        Parameter('--sjdbGTFfile', pathToGtf),
-        Parameter('--outSAMtype', 'BAM', 'Unsorted'),
-        Parameter('--outFileNamePrefix', '{}/{}_'.format(newDir, bid)),
-        Parameter('--genomeDir', pathToGenomeDir),
-        # Parameter('--genomeLoad', genomeLoad), broken
-        Parameter('--readFilesIn', '{}/{}_filtered.fq.gz'.format(newDir, bid)),
-        Parameter('--readFilesCommand zcat') # reads gzipped files
-      )
-    
+    for bamLib in bamFiles:
+      bid_list.append(bamLib.split(':')[-1])
 
     '''
       Sort and extract uniquely mapped reads for QC and further analyses
@@ -254,19 +164,19 @@ def new_dir(outputDir, folder):
       Using this file for the rest of the analysis
     '''
 
-    for bid in bid_list:
-
+    for bamLib in bamFiles:
+      bam, bid = bamLib.split(':')
       newDir = new_dir(outputDir, bid)
       samtools.run(
         Parameter('view'),
         Parameter('-H'),
-        Parameter('{}/{}_Aligned.out.bam'.format(newDir, bid)), # star outfile name
+        Parameter(bam), # star outfile name
         Redirect(stream=Redirect.STDOUT, dest=os.path.join(newDir, 
           '{}.header.sam'.format(bid)))
       )
       samtools.run(
         Parameter('view'),
-        Parameter('{}/{}_Aligned.out.bam'.format(newDir, bid)), # star outfile name
+        Parameter(bam), # star outfile name
         Pipe(
           grep.pipe(
             Parameter('-w'),
@@ -294,7 +204,7 @@ def new_dir(outputDir, folder):
       # subprocess.call(['rm', '{}/{}.header.sam'.format(newDir, bid)])
 
     '''
-      rSeQC to evaluate percent reads mapped to each genomic features
+      SeQC to evaluate percent reads mapped to each genomic features
         read_distribution.py -r hg19_RefSeq.bed12 -i $file
     '''
 
@@ -335,21 +245,24 @@ def new_dir(outputDir, folder):
           '{}.intersect_start100.bed'.format(bid))),
         shell=True
       )
-      start100_file = open('{}/{}.intersect_start100.bed'.format(newDir, bid), 'rb')
-      relativePos_file = open('{}/{}_relative_pos_aggregate.table'.format(newDir, bid), 'wb')
-      distanceList = []
-      for line in start100_file:
-        splitLine = line.split('\t')
-        # Really is relative start
-        if len(splitLine) >= 7:
-          distance = int(splitLine[7]) - (int(splitLine[1]) + 100)
-          distanceList.append(distance)
-      distanceList.sort()
-      distanceCounting = Counter(distanceList)
-      for key, value in distanceCounting.iteritems():
-        relativePos_file.write("{}\t{}\n".format(value,key))
+      awk.run(
+        Parameter('-v'),
+        Parameter("OFS='\\t'"),
+        Parameter('{print ($8-($2+100))}'),
+        Parameter('{}/{}.intersect_start100.bed'.format(newDir, bid)),
+        Pipe(
+          sort.pipe(
+            Pipe(
+              uniq.pipe(
+                Parameter('-c'),
+                Redirect(stream=Redirect.STDOUT, dest=os.path.join(newDir, 
+                  '{}_relative_pos_aggregate.table'.format(bid)))
+              )
+            )  
+          )
+        )
+      )
 
-    # Create chart of relative_positions_aggregate to see codon periodicity
     for bid in bid_list:
       newDir = new_dir(outputDir, bid)
       rpaFile = open('{dir}/{bid}_relative_pos_aggregate.table'.format(dir=newDir, bid=bid), 'rb')
@@ -361,10 +274,10 @@ def new_dir(outputDir, folder):
       for line in rpaFile:
         Frequency, start = line.strip().split(' ')
         if int(start) >= -30 and int(start) <= 30:
-          # print start
+          print start
           myDict[int(start)] = Frequency
 
-      # Change to log scaling?
+      # print times
 
       freqs = []
       starts = []
@@ -373,6 +286,7 @@ def new_dir(outputDir, folder):
         freqs.append(myDict[i])
 
       # print freqs
+
 
       fig, ax = plt.subplots()
       # plt.set_title('{} codon periodicity'.format(bid))
@@ -415,14 +329,14 @@ def new_dir(outputDir, folder):
 
       picard.run(
         Parameter('CollectMultipleMetrics'),
-        Parameter('I={}'.format(bam)),     # input
+        Parameter('I={}/{}.uniq_sorted.bam'.format(newDir, bid)),     # input
         Parameter('O={}/{}.multiple_metrics'.format(newDir, bid)),    # output
         Parameter('R={}'.format(pathTo_genomeFasta))                  # genomeReference
       )
 
       picard.run(
         Parameter('CollectGcBiasMetrics'),
-        Parameter('I={}'.format(bam)),          # input
+        Parameter('I={}/{}.uniq_sorted.bam'.format(newDir, bid)),          # input
         Parameter('O={}/{}.gc_bias_metrics'.format(newDir, bid)),           # output
         Parameter('CHART={}/{}.gc_bias_metrics.pdf'.format(newDir, bid)),   # chart
         Parameter('S={}/{}.summary_metrics'.format(newDir, bid)),           # summary metrics
@@ -431,19 +345,20 @@ def new_dir(outputDir, folder):
 
       picard.run(
         Parameter('CollectRnaSeqMetrics'),
-        Parameter('I={}'.format(bam)),     # input
-        Parameter('O={}/{}.RNA_Metrics'.format(newDir, bid)),          # output
-        Parameter('REF_FLAT={}'.format('{}'.format(pathTo_ref_flat))), # ref_flat
-        Parameter('STRAND=FIRST_READ_TRANSCRIPTION_STRAND')            # strandedness
+        Parameter('I={}/{}.uniq_sorted.bam'.format(newDir, bid)),     # input
+        Parameter('O={}/{}.RNA_Metrics'.format(newDir, bid)),         # output
+        Parameter('REF_FLAT={}/{}'.format(newDir, bid)),              # ref_flat
+        Parameter('STRAND=FIRST_READ_TRANSCRIPTION_STRAND')           # strandedness
       )
 
       picard.run(
         Parameter('MarkDuplicates'),
         Parameter('I={}/{}.uniq_sorted.bam'.format(newDir, bid)),       # input
         Parameter('O={}/{}.marked_duplicates.bam'.format(newDir, bid)), # output
-        Parameter('M={}/{}.marked_dup_metrics.txt'.format(newDir, bid)),# marked dup metrics
-        Parameter('ASSUME_SORTED=true')                                 # It is sorted
+        Parameter('M={}/{}.marked_dup_metrics.txt'),                    # marked dup metrics
+        Parameter('ASSUME_SORTED=true')                                # sorted
       )
+
 
     '''
     subread: featureCounts
@@ -460,17 +375,17 @@ def new_dir(outputDir, folder):
         Parameter('{}/{}.uniq_sorted.bam'.format(newDir, bid))      # input
       )
 
-    '''
-    FastQC
+    # '''
+    # FastQC
 
-      fastqc --outdir=/path_to/<bid>/ /path_to_fastq/<bid>.fastq.gz
-    '''
+    #   fastqc --outdir=/path_to/<bid>/ /path_to_fastq/<bid>.fastq.gz
+    # '''
 
-    for fastqlib in fastqFiles:
-      fastq, bid = fastqlib.split(':')
-      newDir = new_dir(outputDir, bid)
-      fastQC.run(
-        Parameter('--outdir={}'.format(newDir)),   # output
-        Parameter('--t', numThreads),           
-        Parameter(fastq)                           # input
-      )
+    # for fastqlib in fastqFiles:
+    #   fastq, bid = fastqlib.split(':')
+    #   newDir = new_dir(outputDir, bid)
+    #   fastQC.run(
+    #     Parameter('--outdir={}'.format(newDir)),   # output
+    #     Parameter('--t', numThreads),           
+    #     Parameter(fastq)                           # input
+    #   )

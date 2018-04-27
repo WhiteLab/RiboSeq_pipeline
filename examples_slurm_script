@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# Example
+# sbatch -c 8 -J ribo_pipe_1255 --export=output='/path/toOutput',fastq='/path/to/fastq.gz:sample_name',threads=8 riboseq.sl
+
+#SBATCH -J RiboSeq-pipeline
+#SBATCH -o %jout_riboSeq -e %jerr_riboSeq
+#SBATCH --export=threads=8
+#SBATCH -c 8 # Number of cpus
+#SBATCH --mem 32G
+#SBATCH --chdir=/path/to/data/analysis
+
+export CHUNKY_HOME=/home/for/chunky
+
+source /virtual_environment/bin/activate
+
+chunky run RiboSeq_pipeline --threads $threads --fastq:lib $fastq --output $output
